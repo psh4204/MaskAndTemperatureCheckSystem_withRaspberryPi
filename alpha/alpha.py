@@ -1,5 +1,7 @@
 import os
 import argparse
+
+from numpy.core.arrayprint import str_format
 import cv2
 import numpy as np
 import sys
@@ -10,27 +12,43 @@ import importlib.util
 import board
 import busio as io
 import adafruit_mlx90614
-from time import sleep
+from time import monotonic, sleep
 
 
 # ******************** 데이터 출력 클래스 *********************
 # + MLX90614_적외선온도감지센서 클래스 합침
-tempValue = 1 # 적외선 센서 가중치(잘안되면 만져야하는 부분)
+
 class DataController:
-    global tempValue
     def __init__(self,freq=10000) :
         # TODO : 변수 조정
+        # Loop 용 데이터 감지 변수
+        self.check = False
+        # Loop 용 checkDone 변수
+        self.checkDone = True
+        # Loop 용 체온 카운트 변수
+        self.targetTempCnt = 0
+        # 쓰레드 멈춤 변수
         self.stopped = False
-        # 주변온도 받아오는 변수
+        # 모듈온도 받아오는 변수
         self.ambientTemp = 0
         # 체온 받아오는 변수
         self.targetTemp = 0 
+        # (Out) 체온 보내는 변수
+        self.targetTemp_relay = 0
+        # (변수) 체온이 이상하게 체크 될때 사용될 weight 값
+        self.tempWeight = 1
         # 마스크 라벨링 값 받아오는 변수
-        self.maskClass = 0
+        self.maskClass = 'none'
+        # (Out) 마스크 라벨링 값 보내는 변수
+        self.maskClass_relay = 'none'
         # 마스크 라벨링 점수 받아오는 변수
         self.maskScore = 0.0
+        # (버퍼) # 마스크 라벨링 점수 받아오는 변수
+        self.maskScore_buff = 0.0
         # 마스크 이미지 받아오는 변수 ( h, w, ch )
         self.maskImage = np.full((50,50,3), (255,255,255), dtype=np.uint8)
+        # (Out) 마스크 이미지 보내는 변수
+        self.maskImage_relay = np.full((50,50,3), (255,255,255), dtype=np.uint8)
         # 온도 센서 init
         self.i2c = io.I2C(board.SCL, board.SDA, frequency=freq) # 10k ~ 100k Hz
         self.mlx = adafruit_mlx90614.MLX90614(self.i2c)
@@ -41,29 +59,83 @@ class DataController:
     def update(self) :
         self.stopped = False
         while True :
+            time.sleep(0.01)
             if self.stopped == True :
                 return
-            # 현재 기온
-            self.ambientTemp = round(self.mlx.ambient_temperature,1)
-            # 측정 온도 ( 추천 측정 거리 : 1cm )
-            self.targetTemp = round(self.mlx.object_temperature * tempValue,1)
-            time.sleep(0.05)
-    
+            # 현재 모듈온도
+            self.checkAmbientTemp(round(self.mlx.ambient_temperature,1))
+            ### 체온 측정
+            self.checkTargetTemp(round(self.mlx.object_temperature,1))
 
+            # --- [이미지 및 체온 체크 알고리즘] ---
+            # 1초간 값을 받아온 후 마지막 값을 출력한다. (for 루프)
+            # [Do Check]
+            if ((self.check) and (self.checkDone == False)) :
+                print('[[[[Data In]]]]')
+                for i in range(10) :
+                    ## (In) 마스크 입력 
+                    ### MainLoop 에서 마스크관련 값을 받아오기 때문에 
+                    ### 전송할 데이터만 받아오면 된다.
+                    self.maskImage_relay = self.maskImage
+                    self.maskClass_relay = self.maskClass
+                    self.targetTemp_relay = self.targetTemp
+                    time.sleep(0.1)
+                
+                ### 마스크를 착용 및 , 체온이 문제 없으면 전송
+                if ((self.maskClass_relay == 'with_mask') and (33 < self.targetTemp_relay < 37.5)):
+                    # 데이터 전송
+                    print('[[[[Pass]]]]')
+                    cv2.imwrite("./"+self.maskClass_relay + "/" + "pass_"+str(self.targetTemp_relay)+".jpg", self.maskImage_relay)
+                #### 마스크 미착용 시 경고
+                elif ((self.maskClass_relay != 'without_mask') and (33 < self.targetTemp_relay < 37.5)):
+                    print('[[[[Fail_mask]]]]')
+                    cv2.imwrite("./"+self.maskClass_relay + "/" + "fail_"+str(self.targetTemp_relay)+".jpg", self.maskImage_relay)
+                #### 체온 문제있을 시 경고
+                elif (self.targetTemp_relay >= 37.5) :
+                    print('[[[[Fail_temp]]]]')
+                    cv2.imwrite("./"+self.maskClass_relay + "/" + "fail_"+str(self.targetTemp_relay)+".jpg", self.maskImage_relay)
+                #### 초기화
+                self.maskImage_relay = np.full((50,50,3), (255,255,255), dtype=np.uint8)
+                self.maskClass_relay = 'none'
+                self.targetTemp_relay = 0
+                self.check = False
+                self.checkDone = True
+                
+                
     def stop(self) :
         self.stopped = True
-
-    # 주변온도 체크 함수
+    # motion 으로, 체크 Loop 값 Write
+    def loopCheckMotion(self, check):
+        self.check = check
+    # 모듈온도 Read 함수
     def readAmbientTemp(self):
         return self.ambientTemp
+    # 측정체온 Read 함수
     def readTargetTemp(self):
         return self.targetTemp
-    # 체온 체크 함수
+    def readRealTargetTemp(self):
+        return self.realTargetTemp
+    # 주변 온도 체크 함수
     def checkAmbientTemp(self, temp):
         self.ambientTemp = temp
-    # 주변온도 체크 함수
+    # 체온 체크 함수
     def checkTargetTemp(self, temp):
-        self.targetTemp = temp
+        if temp < 30 :
+            # 일정 시간동안 self.checkDone을 True로 유지시켜준다.
+            if self.targetTempCnt > 10 :
+                self.checkDone = False
+                self.targetTempCnt = 0
+            self.targetTempCnt +=1
+        
+        # 센서 오작동이 심한 관계로, 임의의 가중치를 설정
+        if temp >= 34:
+            self.tempWeight = temp/11.7
+            self.targetTemp = round(32 + self.tempWeight,1)
+        elif temp < 34 :
+            self.targetTemp = round(temp,1)
+        
+        self.realTargetTemp = round(temp,1)
+            
 
     # 마스크 라벨링 값 체크 함수
     def checkMaskClass(self, label) :
@@ -81,9 +153,11 @@ class DataController:
     def catchImage(self, image, label ,ymin, xmin, ymax, xmax):
         self.checkMaskImage(image[ ymin:ymax , xmin:xmax ].copy())
         self.checkMaskClass(label)
-        # test View
-        cv2.imshow(self.maskClass ,self.maskImage)
-        cv2.waitKey(1)
+
+    # def checkDoneFunc(self):
+    #     self.checkDone = True
+        
+        
 
 
 
@@ -377,11 +451,16 @@ while True:
             cv2.putText(frame, label, (xmin, label_ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2) # 라벨텍스트 입력
 
             dataCtr.catchImage(frame1.copy(), object_name, ymin, xmin, ymax, xmax)
-
+            dataCtr.loopCheckMotion(True)
+            
         # --- 체온 측정 ---
-        os.system('clear')
-        print("현재 기온 : " + str(dataCtr.readAmbientTemp()))
+        # os.system('clear')
+        print("모듈 온도 : " + str(dataCtr.readAmbientTemp()))
         print("측정 체온 : " + str(dataCtr.readTargetTemp()))
+        print("실제 측정 체온 : "+ str(dataCtr.readRealTargetTemp()))
+        
+    
+    
 
         
 
