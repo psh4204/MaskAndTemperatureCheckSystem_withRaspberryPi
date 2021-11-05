@@ -23,6 +23,7 @@ import busio as io
 import adafruit_mlx90614
 from time import monotonic, sleep
 
+
 # ******************** 데이터 출력 클래스 *********************
 # + MLX90614_적외선온도감지센서 클래스 합침
 class DataController:
@@ -433,23 +434,29 @@ label_video.grid(row=0,sticky=(E,W,S,N))
 frame_face = Frame(window, width=230, height=230, highlightthickness=2 ,highlightbackground='gray35')
 frame_face.place(x= 794) # 224*224
 frame_face["relief"] = "solid"
+# GUI_라벨_위치정보알림창
+label_time = Label(frame_face, text="시간", bd=1, relief=SUNKEN)
+label_time.grid(row=0,sticky=(E,W))  # 라벨 행, 열 배치
+now = time.localtime()
+current_time = str(now.tm_hour)+"시 "+str(now.tm_min)+"분 "+str(now.tm_sec) + "초"    # 시간 ( 00시, 00분, 00초 )
+label_time.configure(text=current_time, font=(None,15),bg='gray15',fg='white')
 # 프레임_상태알림창(체온 및 Pass 여부)
 label_alarm = Label(frame_face,text="환영합니다.", font=(None,33),bg='black',fg='white')
-label_alarm.grid(row=0,sticky=(E,W))
+label_alarm.grid(row=1,sticky=(E,W))
 ## 라벨_얼굴
 label_face = Label(frame_face,width=224, height=224)
-label_face.grid(row=1,sticky=(E,W,S,N))
+label_face.grid(row=2,sticky=(E,W,S,N))
 label_face.configure(image='', bg='gray25')
 
 # GUI_라벨_위치정보알림창
 label_status = Label(window, text="업소 정보 : ", bd=1, relief=SUNKEN)
-label_status.place(x=0)  # 라벨 행, 열 배치
+label_status.grid(row=0)  # 라벨 행, 열 배치
 current_place = "한남대학교"    # 장소 이름 ( 기본 값 )
-label_status.configure(text="현재 장소 : " + current_place, font=(None,15),bg='gray15',fg='white')
+
 
 # GUI 함수
 def showImage(videostream, dataCtr):
-    global window, current_place
+    global window, current_place, now, current_time
     global grabFrame, grabFrame_2, motion, thresholdV, motion_maxCount
     global interpreter, frame_rate_calc, freq, input_mean, input_std
     global min_conf_threshold
@@ -572,8 +579,13 @@ def showImage(videostream, dataCtr):
     label_video.imgtk = imgtk
 
     # GUI 업데이트
+    ## GUI 장소 업데이트
     label_video.configure(image=imgtk)
-    label_status.configure(text="현재 장소 : " + current_place, font=(None,15))
+    label_status.configure(text="현재 장소 : " + current_place, font=(None,15),bg='gray15',fg='white')
+    ## GUI 시간 업데이트
+    now = time.localtime()
+    current_time = str(now.tm_hour)+"시 "+str(now.tm_min)+"분 "+str(now.tm_sec) + "초"    # 시간 ( 00시, 00분, 00초 )
+    label_time.configure(text=current_time, font=(None,15),bg='gray15',fg='white')
     ## GUI 마스크 및 온도정보 업데이트
     alarmText = dataCtr.writeAlarmText()
     alarmTextColor = dataCtr.writeAlarmTextColor()
