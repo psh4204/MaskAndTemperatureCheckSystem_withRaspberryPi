@@ -23,7 +23,6 @@ import busio as io
 import adafruit_mlx90614
 from time import monotonic, sleep
 
-
 # ******************** 데이터 출력 클래스 *********************
 # + MLX90614_적외선온도감지센서 클래스 합침
 class DataController:
